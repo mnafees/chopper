@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -13,6 +14,7 @@ const (
 	totalMemory    = 0x1000
 	pcStartLoc     = 0x200
 	maxProgramSize = totalMemory - pcStartLoc
+	timerHz        = float64(1000.0 / 60)
 )
 
 // C8VM is an emulated CHIP-8 VM
@@ -27,6 +29,7 @@ type C8VM struct {
 	stack      [16]uint16         // A stack of 16 16-bit values
 	memory     [totalMemory]uint8 // 4 KB global memory
 	io         *IO                // I/O layer
+	prevTime   time.Time          // Just a counter to keep the previously logged time
 }
 
 var fontset = []uint8{
@@ -51,8 +54,9 @@ var fontset = []uint8{
 // NewC8VM creates a new instance of an emulated CHIP-8 VM
 func NewC8VM(ioLayer *IO) *C8VM {
 	vm := &C8VM{
-		pc: pcStartLoc,
-		io: ioLayer,
+		pc:       pcStartLoc,
+		io:       ioLayer,
+		prevTime: time.Now(),
 	}
 	if copy(vm.memory[:], fontset[:]) != len(fontset) {
 		fmt.Println("Error copying fontset data to memory")
@@ -83,7 +87,6 @@ func (vm *C8VM) LoadProgram(filename string) {
 // Loop is the main application loop
 func (vm *C8VM) Loop() {
 	running := true
-	vm.io.draw = true
 	for running {
 		vm.readNextInstruction()
 
@@ -93,6 +96,16 @@ func (vm *C8VM) Loop() {
 
 		if vm.io.draw {
 			vm.io.drawSprite()
+		}
+
+		if float64(time.Since(vm.prevTime).Milliseconds()) >= timerHz {
+			if vm.delayTimer > 0 {
+				vm.delayTimer--
+			}
+			if vm.soundTimer > 0 {
+				vm.soundTimer--
+			}
+			vm.prevTime = time.Now()
 		}
 
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
