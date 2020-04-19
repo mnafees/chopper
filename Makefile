@@ -1,7 +1,7 @@
-chopper:
+build:
 	@go build chopper.go
-
-.PHONY: clean
 
 clean:
 	@rm chopper
+
+.PHONY: clean
