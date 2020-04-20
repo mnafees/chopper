@@ -90,11 +90,11 @@ func (vm *C8VM) Loop() {
 	for running {
 		vm.readNextInstruction()
 
-		if vm.io.clear {
+		if vm.io.clearFlag {
 			vm.io.clearScreen()
 		}
 
-		if vm.io.draw {
+		if vm.io.drawFlag {
 			vm.io.drawSprite()
 		}
 
@@ -111,15 +111,13 @@ func (vm *C8VM) Loop() {
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 			switch t := event.(type) {
 			case *sdl.KeyboardEvent:
-				idx := vm.io.keymap(t.Keysym.Scancode)
-				if idx != -1 {
-					switch t.GetType() {
-					case sdl.KEYDOWN:
-						vm.io.key[idx] = true
-						break
-					case sdl.KEYUP:
-						vm.io.key[idx] = false
-					}
+				keycode := t.Keysym.Scancode
+				switch t.GetType() {
+				case sdl.KEYDOWN:
+					vm.io.setKeymask(keycode)
+					break
+				case sdl.KEYUP:
+					vm.io.unsetKeymask(keycode)
 				}
 				break
 			case *sdl.QuitEvent:
@@ -165,7 +163,7 @@ func (vm *C8VM) readNextInstruction() {
 	case 0x0000:
 		switch kk {
 		case 0xE0: // CLS
-			vm.io.clear = true
+			vm.io.clearFlag = true
 			vm.pc += 2
 			break
 		case 0xEE: // RET
@@ -302,17 +300,17 @@ func (vm *C8VM) readNextInstruction() {
 	case 0xD000: // DRW Vx, Vy, n
 		vm.initSprite(vm.regV[x], vm.regV[y], n)
 		vm.pc += 2
-		vm.io.draw = true
+		vm.io.drawFlag = true
 		break
 	case 0xE000:
 		switch kk {
 		case 0x9E: // SKP Vx
-			if vm.io.key[vm.regV[x]] {
+			if vm.io.issetKeymask(vm.regV[x]) {
 				vm.pc += 2
 			}
 			break
 		case 0xA1: // SKNP Vx
-			if !vm.io.key[vm.regV[x]] {
+			if !vm.io.issetKeymask(vm.regV[x]) {
 				vm.pc += 2
 			}
 			break
@@ -330,7 +328,7 @@ func (vm *C8VM) readNextInstruction() {
 			loop := true
 			for loop {
 				for i := uint8(0x0); i <= 0xF; i++ {
-					if vm.io.key[i] {
+					if vm.io.issetKeymask(vm.regV[x]) {
 						vm.regV[x] = i
 						loop = false
 						break

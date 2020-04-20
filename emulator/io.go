@@ -23,12 +23,12 @@ type IO struct {
 
 	// 64 px x 32 px display
 	pixels [screenWidth][screenHeight]uint8
-	// Array to hold key values
-	// TODO: Can do better?
-	key [16]bool
+	// A 16-bit integer to hold the current key values in the form of individual bits.
+	// So when 0 is pushed in the keypad, the 0'th bit will be set and so on.
+	key int16
 
-	clear bool
-	draw  bool
+	clearFlag bool
+	drawFlag  bool
 }
 
 // NewIO returns a new IO instance to be provided to the VM
@@ -71,9 +71,9 @@ func (io *IO) clearScreen() {
 			io.pixels[w][h] = 0
 		}
 	}
-	io.clear = false
 	io.surface.FillRect(nil, screenColor)
 	io.window.UpdateSurface()
+	io.clearFlag = false
 }
 
 // Draws a sprite
@@ -88,7 +88,7 @@ func (io *IO) drawSprite() {
 		}
 	}
 	io.window.UpdateSurface()
-	io.draw = false
+	io.drawFlag = false
 }
 
 // Maps keys from a QWERTY keyboard to the keypad used by CHIP-8
@@ -139,4 +139,23 @@ func (io *IO) keymap(code sdl.Scancode) int8 {
 	default:
 		return -1
 	}
+}
+
+func (io *IO) setKeymask(keycode sdl.Scancode) {
+	code := io.keymap(keycode)
+	if code != -1 {
+		io.key |= (1 << code)
+	}
+}
+
+func (io *IO) unsetKeymask(keycode sdl.Scancode) {
+	code := io.keymap(keycode)
+	if code != -1 {
+		io.key ^= (1 << code)
+	}
+}
+
+func (io *IO) issetKeymask(keycode uint8) bool {
+	mask := int16(1 << keycode)
+	return io.key&mask == mask
 }
