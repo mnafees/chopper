@@ -4,7 +4,7 @@ A CHIP-8 Emulator written in Go with SDL
 
 ## Dependencies
 
-- Go 1.11+
+- Go 1.13+
 - libsdl 2
 
 ## Build
