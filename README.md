@@ -2,6 +2,8 @@
 
 A CHIP-8 Emulator written in Go with SDL
 
+![Chopper runnning on Ubuntu](chopper.png)
+
 ## Dependencies
 
 - Go 1.13+
