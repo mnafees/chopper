@@ -1,20 +1,24 @@
-package emulator
+package internal
+
+// Follows the CHIP-8 technical reference found at http://devernay.free.fr/hacks/chip8/C8TECH10.HTM
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
-	"os"
 	"time"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
+// CHIP-8 VM constants
 const (
 	totalMemory    = 0x1000
-	pcStartLoc     = 0x200
-	maxProgramSize = totalMemory - pcStartLoc
-	timerHz        = float64(1000.0 / 60)
+	pcStartAddr    = 0x200
+	maxProgramSize = totalMemory - pcStartAddr
+
+	TimerFrequency = float64(1000.0 / 60)
+	ScreenWidth    = 64
+	ScreenHeight   = 32
 )
 
 // C8VM is an emulated CHIP-8 VM
@@ -28,8 +32,18 @@ type C8VM struct {
 	sp         uint8              // Stack pointer
 	stack      [16]uint16         // A stack of 16 16-bit values
 	memory     [totalMemory]uint8 // 4 KB global memory
-	io         *IO                // I/O layer
-	prevTime   time.Time          // Just a counter to keep the previously logged time
+
+	prevTime time.Time // Just a counter to keep the previously logged time
+
+	clearFlag bool // Clear screen flag
+	drawFlag  bool // Draw sprite flag
+
+	// A 16-bit integer to hold the current key values in the form of individual bits.
+	// So when 0 is pushed in the keypad, the 0'th bit will be set and so on.
+	key int16
+
+	// 64 px x 32 px display
+	pixels [ScreenWidth][ScreenHeight]uint8
 }
 
 var fontset = []uint8{
@@ -52,85 +66,36 @@ var fontset = []uint8{
 }
 
 // NewC8VM creates a new instance of an emulated CHIP-8 VM
-func NewC8VM(ioLayer *IO) *C8VM {
+func NewC8VM() (*C8VM, error) {
 	vm := &C8VM{
-		pc:       pcStartLoc,
-		io:       ioLayer,
+		pc:       pcStartAddr,
 		prevTime: time.Now(),
 	}
 	if copy(vm.memory[:], fontset[:]) != len(fontset) {
-		fmt.Println("Error copying fontset data to memory")
-		os.Exit(1)
+		return nil, errors.New("Error copying fontset data to memory")
 	}
-	return vm
+	return vm, nil
 }
 
 // LoadProgram loads a given CHIP-8 program into the VM's memory
-func (vm *C8VM) LoadProgram(filename string) {
+func (vm *C8VM) LoadProgram(filename string) error {
 	data, err := ioutil.ReadFile(filename)
 
 	if err != nil {
-		fmt.Printf("Error loading program: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error loading program: %v", err)
 	}
-	dataSize := len(data)
-	if dataSize > maxProgramSize {
-		fmt.Println("Program size exceeds the maximum size")
-		os.Exit(1)
+	size := len(data)
+	if size > maxProgramSize {
+		return errors.New("Program size exceeds the maximum size")
 	}
-	if copy(vm.memory[pcStartLoc:], data) != dataSize {
-		fmt.Println("Error copying program data into VM's memory")
-		os.Exit(1)
+	if copy(vm.memory[pcStartAddr:], data) != size {
+		return errors.New("Error copying program data into VM's memory")
 	}
+	return nil
 }
 
-// Loop is the main application loop
-func (vm *C8VM) Loop() {
-	running := true
-	for running {
-		vm.readNextInstruction()
-
-		if vm.io.clearFlag {
-			vm.io.clearScreen()
-		}
-
-		if vm.io.drawFlag {
-			vm.io.drawSprite()
-		}
-
-		if float64(time.Since(vm.prevTime).Milliseconds()) >= timerHz {
-			if vm.delayTimer > 0 {
-				vm.delayTimer--
-			}
-			if vm.soundTimer > 0 {
-				vm.soundTimer--
-			}
-			vm.prevTime = time.Now()
-		}
-
-		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
-			switch t := event.(type) {
-			case *sdl.KeyboardEvent:
-				keycode := t.Keysym.Scancode
-				switch t.GetType() {
-				case sdl.KEYDOWN:
-					vm.io.setKeymask(keycode)
-					break
-				case sdl.KEYUP:
-					vm.io.unsetKeymask(keycode)
-				}
-				break
-			case *sdl.QuitEvent:
-				running = false
-				break
-			}
-		}
-	}
-}
-
-func (vm *C8VM) unknownOpcode() {
-	fmt.Printf("Unknown opcode: %04X\n", vm.opcode)
-	os.Exit(1)
+func (vm *C8VM) unknownOpcode() error {
+	return fmt.Errorf("Unknown opcode: %04X", vm.opcode)
 }
 
 func (vm *C8VM) initSprite(x uint8, y uint8, n uint8) {
@@ -142,7 +107,7 @@ func (vm *C8VM) initSprite(x uint8, y uint8, n uint8) {
 		spriteByte := vm.memory[vm.regI+uint16(byteIdx)]
 		for bitIdx := uint8(0); bitIdx < 8; bitIdx++ {
 			bit := (spriteByte >> bitIdx) & 0x1
-			px := &vm.io.pixels[(x+(7-bitIdx))%screenWidth][(y+byteIdx)%screenHeight]
+			px := &vm.pixels[(x+(7-bitIdx))%ScreenWidth][(y+byteIdx)%ScreenHeight]
 			if bit == 1 && *px == 1 {
 				vm.regV[0xF] = 1
 			}
@@ -151,7 +116,22 @@ func (vm *C8VM) initSprite(x uint8, y uint8, n uint8) {
 	}
 }
 
-func (vm *C8VM) readNextInstruction() {
+// NullifyPixels resets all pixels to a value of 0
+func (vm *C8VM) NullifyPixels() {
+	for w := 0; w < ScreenWidth; w++ {
+		for h := 0; h < ScreenHeight; h++ {
+			vm.pixels[w][h] = 0
+		}
+	}
+}
+
+// Pixels returns the pixels 2d slice
+func (vm *C8VM) Pixels() [ScreenWidth][ScreenHeight]byte {
+	return vm.pixels
+}
+
+// ReadNextInstruction reads the next instruction to execute
+func (vm *C8VM) ReadNextInstruction() error {
 	vm.opcode = uint16(vm.memory[vm.pc])<<8 | uint16(vm.memory[vm.pc+1]) // 16-bit instruction opcode
 	x := uint8((vm.opcode >> 8) & 0x000F)                                // the lower 4 bits of the high byte of the instruction
 	y := uint8((vm.opcode >> 4) & 0x000F)                                // the upper 4 bits of the low byte of the instruction
@@ -163,7 +143,7 @@ func (vm *C8VM) readNextInstruction() {
 	case 0x0000:
 		switch kk {
 		case 0xE0: // CLS
-			vm.io.clearFlag = true
+			vm.clearFlag = true
 			vm.pc += 2
 			break
 		case 0xEE: // RET
@@ -171,7 +151,7 @@ func (vm *C8VM) readNextInstruction() {
 			vm.pc = vm.stack[vm.sp] + 2
 			break
 		default:
-			vm.unknownOpcode()
+			return vm.unknownOpcode()
 		}
 		break
 	case 0x1000: // JP nnn
@@ -203,7 +183,7 @@ func (vm *C8VM) readNextInstruction() {
 			vm.pc += 2
 			break
 		default:
-			vm.unknownOpcode()
+			return vm.unknownOpcode()
 		}
 		break
 	case 0x6000: // LD Vx, kk
@@ -270,7 +250,7 @@ func (vm *C8VM) readNextInstruction() {
 			vm.regV[x] *= 2
 			break
 		default:
-			vm.unknownOpcode()
+			return vm.unknownOpcode()
 		}
 		vm.pc += 2
 		break
@@ -283,7 +263,7 @@ func (vm *C8VM) readNextInstruction() {
 			vm.pc += 2
 			break
 		default:
-			vm.unknownOpcode()
+			return vm.unknownOpcode()
 		}
 		break
 	case 0xA000: // LD I, nnn
@@ -300,22 +280,22 @@ func (vm *C8VM) readNextInstruction() {
 	case 0xD000: // DRW Vx, Vy, n
 		vm.initSprite(vm.regV[x], vm.regV[y], n)
 		vm.pc += 2
-		vm.io.drawFlag = true
+		vm.drawFlag = true
 		break
 	case 0xE000:
 		switch kk {
 		case 0x9E: // SKP Vx
-			if vm.io.issetKeymask(vm.regV[x]) {
+			if vm.issetKeymask(vm.regV[x]) {
 				vm.pc += 2
 			}
 			break
 		case 0xA1: // SKNP Vx
-			if !vm.io.issetKeymask(vm.regV[x]) {
+			if !vm.issetKeymask(vm.regV[x]) {
 				vm.pc += 2
 			}
 			break
 		default:
-			vm.unknownOpcode()
+			return vm.unknownOpcode()
 		}
 		vm.pc += 2
 		break
@@ -328,7 +308,7 @@ func (vm *C8VM) readNextInstruction() {
 			loop := true
 			for loop {
 				for i := uint8(0x0); i <= 0xF; i++ {
-					if vm.io.issetKeymask(vm.regV[x]) {
+					if vm.issetKeymask(vm.regV[x]) {
 						vm.regV[x] = i
 						loop = false
 						break
@@ -364,11 +344,81 @@ func (vm *C8VM) readNextInstruction() {
 			}
 			break
 		default:
-			vm.unknownOpcode()
+			return vm.unknownOpcode()
 		}
 		vm.pc += 2
 		break
 	default:
-		vm.unknownOpcode()
+		return vm.unknownOpcode()
 	}
+	return nil
+}
+
+// SetKeymask sets the respective bit in the key
+func (vm *C8VM) SetKeymask(code uint8) {
+	vm.key |= (1 << code)
+}
+
+// UnsetKeymask unsets the respective bit in the key
+func (vm *C8VM) UnsetKeymask(code uint8) {
+	vm.key ^= (1 << code)
+}
+
+// PrevTime returns the prviously logged time
+func (vm *C8VM) PrevTime() time.Time {
+	return vm.prevTime
+}
+
+// IsClearFlagSet returns whether the clear flag is set
+func (vm *C8VM) IsClearFlagSet() bool {
+	return vm.clearFlag
+}
+
+// UnsetClearFlag unsets the clear flag
+func (vm *C8VM) UnsetClearFlag() {
+	vm.clearFlag = false
+}
+
+// IsDrawFlagSet returns whether the draw flag is set
+func (vm *C8VM) IsDrawFlagSet() bool {
+	return vm.drawFlag
+}
+
+// UnsetDrawFlag unsets the draw flag
+func (vm *C8VM) UnsetDrawFlag() {
+	vm.drawFlag = false
+}
+
+// DelayTimer returns the value of DT
+func (vm *C8VM) DelayTimer() uint8 {
+	return vm.delayTimer
+}
+
+// DecrementDelayTimer decrements the value of DT
+func (vm *C8VM) DecrementDelayTimer() {
+	if vm.delayTimer > 0 {
+		vm.delayTimer--
+	}
+}
+
+// SoundTimer returns the value of ST
+func (vm *C8VM) SoundTimer() uint8 {
+	return vm.soundTimer
+}
+
+// DecrementSoundTimer decrements the value of ST
+func (vm *C8VM) DecrementSoundTimer() {
+	if vm.soundTimer > 0 {
+		vm.soundTimer--
+	}
+}
+
+// UpdatePrevTime updates the previously logged time to the current time
+func (vm *C8VM) UpdatePrevTime() {
+	vm.prevTime = time.Now()
+}
+
+func (vm *C8VM) issetKeymask(code uint8) bool {
+	mask := int16(1 << code)
+	return vm.key&mask == mask
 }

@@ -1,5 +1,5 @@
-build:
-	@go build chopper.go
+sdl:
+	@go build -o chopper ./cmd/sdl
 
 clean:
 	@rm chopper
